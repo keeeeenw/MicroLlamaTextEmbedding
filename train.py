@@ -6,47 +6,19 @@ from transformers import AutoTokenizer, LlamaForCausalLM, AutoModelForCausalLM
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, losses, models, SentenceTransformerTrainingArguments
 from sentence_transformers.losses import CoSENTLoss, MultipleNegativesRankingLoss, SoftmaxLoss
 
+import random
+import numpy as np
 
-# 0. Load a model to train
-# https://stackoverflow.com/questions/76051807/automodelforcausallm-for-extracting-text-embeddings
-# tokenizer = AutoTokenizer.from_pretrained("keeeeenw/MicroLlama")
-# base_model = AutoModelForCausalLM.from_pretrained("keeeeenw/MicroLlama")
+# 0. Setting seeds
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+set_seed(42)  # You can choose any seed value
 
-# texts = [
-#     "this is a test",
-#     "this is another test case with a different length",
-# ] 
-# tokenizer.pad_token = tokenizer.eos_token
-# t_input = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
-
-
-# with torch.no_grad():
-#     last_hidden_state = base_model(**t_input, output_hidden_states=True).hidden_states[-1]
-
-
-# weights_for_non_padding = t_input.attention_mask * torch.arange(start=1, end=last_hidden_state.shape[1] + 1).unsqueeze(0)
-
-# sum_embeddings = torch.sum(last_hidden_state * weights_for_non_padding.unsqueeze(-1), dim=1)
-# num_of_none_padding_tokens = torch.sum(weights_for_non_padding, dim=-1).unsqueeze(-1)
-# sentence_embeddings = sum_embeddings / num_of_none_padding_tokens
-# print(sentence_embeddings)
-
-# 1. Construct the same embedding model for training
-# tokenizer = AutoTokenizer.from_pretrained("keeeeenw/MicroLlama")
-# tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-
-# # Create a SentenceTransformer model from the base model and add layers to output embeddings.
-# # # base_model = AutoModelForCausalLM.from_pretrained("keeeeenw/MicroLlama")
-# # base_model = models.Transformer("keeeeenw/MicroLlama", tokenizer_args={'pad_token': '[PAD]'})
-# # pooling_model = models.Pooling(
-# #     base_model.get_word_embedding_dimension(),
-# #     pooling_mode_mean_tokens=True
-# # )
-# # model = SentenceTransformer(modules=[base_model, pooling_model])
-# # print(model)
-
-# model = SentenceTransformer("keeeeenw/MicroLlama", tokenizer_kwargs={'pad_token': '[PAD]'})
-
+# 1. Model setup
+# Setup tokenizer with extra token for padding
 tokenizer = AutoTokenizer.from_pretrained("keeeeenw/MicroLlama")
 special_tokens_dict = {'pad_token': '[PAD]'}
 tokenizer.add_special_tokens(special_tokens_dict)
@@ -140,17 +112,26 @@ losses = {
 }
 
 # 5. Define a simple trainer, although it's recommended to use one with args & evaluators
+train_args = SentenceTransformerTrainingArguments(
+    "tmp_trainer-first-10000-3-epoch-retry-1-no-auto-batch",
+    per_device_train_batch_size=6,  # Batch size per GPU (or CPU if no GPU is used)
+    per_device_eval_batch_size=6,   # Evaluation batch size if you have eval dataset
+    # num_train_epochs=10,              # default is 3
+    # auto_find_batch_size=True,        # auto adjust batch size
+    evaluation_strategy="steps",      # Evaluate every N steps
+    eval_steps=500,                  # Perform evaluation every 5000 steps
+)
+# Default is save for every 500 steps
+# https://sbert.net/docs/package_reference/sentence_transformer/training_args.html#sentence_transformers.training_args.SentenceTransformerTrainingArguments.set_save
+train_args.set_save(strategy="steps", steps=5000)
+
 trainer = SentenceTransformerTrainer(
     model=model,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     loss=losses,
     tokenizer=tokenizer,
-    args = SentenceTransformerTrainingArguments(
-        "tmp_trainer",
-        per_device_train_batch_size=6,  # Batch size per GPU (or CPU if no GPU is used)
-        per_device_eval_batch_size=6,   # Evaluation batch size if you have eval dataset
-    )
+    args = train_args
 )
 trainer.train()
 
