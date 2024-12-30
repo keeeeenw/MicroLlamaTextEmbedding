@@ -47,19 +47,30 @@ model = SentenceTransformer(modules=[base_model, pooling_model])
 
 # 2. Load several Datasets to train with
 # (anchor, positive)
-all_nli_pair_train = load_dataset("sentence-transformers/all-nli", "pair", split="train[:10000]")
+all_nli_pair_train = load_dataset("sentence-transformers/all-nli", "pair", split="train")
+# re-name column to allow resume
+# Only rename if not resuming
+# if 'dataset_name' in all_nli_pair_train.column_names:
+#     all_nli_pair_train = all_nli_pair_train.rename_column('dataset_name', 'all_nli_dataset_name')
+
+# Remove the 'dataset_name' column
+# if "dataset_name" in all_nli_pair_train.column_names:
+#     all_nli_pair_train = all_nli_pair_train.remove_columns("dataset_name")
+
 # (premise, hypothesis) + label
-all_nli_pair_class_train = load_dataset("sentence-transformers/all-nli", "pair-class", split="train[:10000]")
+all_nli_pair_class_train = load_dataset("sentence-transformers/all-nli", "pair-class", split="train")
 # (sentence1, sentence2) + score
-all_nli_pair_score_train = load_dataset("sentence-transformers/all-nli", "pair-score", split="train[:10000]")
+all_nli_pair_score_train = load_dataset("sentence-transformers/all-nli", "pair-score", split="train")
 # (anchor, positive, negative)
-all_nli_triplet_train = load_dataset("sentence-transformers/all-nli", "triplet", split="train[:10000]")
+all_nli_triplet_train = load_dataset("sentence-transformers/all-nli", "triplet", split="train")
 # (sentence1, sentence2) + score
-stsb_pair_score_train = load_dataset("sentence-transformers/stsb", split="train[:10000]")
+stsb_pair_score_train = load_dataset("sentence-transformers/stsb", split="train")
+# TODO: 149k row in total, add more training data
 # (anchor, positive)
-quora_pair_train = load_dataset("sentence-transformers/quora-duplicates", "pair", split="train[:10000]")
+quora_pair_train = load_dataset("sentence-transformers/quora-duplicates", "pair", split="train[:139000]")
+# TODO: 100k row in total, add more training data
 # (query, answer)
-natural_questions_train = load_dataset("sentence-transformers/natural-questions", split="train[:10000]")
+natural_questions_train = load_dataset("sentence-transformers/natural-questions", split="train[:90000]")
 
 # We can combine all datasets into a dictionary with dataset names to datasets
 train_dataset = {
@@ -72,15 +83,19 @@ train_dataset = {
     "natural-questions": natural_questions_train,
 }
 
+print("Training sets")
+for k,v in train_dataset.items():
+    print(k, v.column_names)
+
 # 3. Load several Datasets to evaluate with
 # (anchor, positive, negative)
 all_nli_triplet_dev = load_dataset("sentence-transformers/all-nli", "triplet", split="dev")
 # (sentence1, sentence2, score)
 stsb_pair_score_dev = load_dataset("sentence-transformers/stsb", split="validation")
 # (anchor, positive)
-quora_pair_dev = load_dataset("sentence-transformers/quora-duplicates", "pair", split="train[10000:11000]")
+quora_pair_dev = load_dataset("sentence-transformers/quora-duplicates", "pair", split="train[139000:]")
 # (query, answer)
-natural_questions_dev = load_dataset("sentence-transformers/natural-questions", split="train[10000:11000]")
+natural_questions_dev = load_dataset("sentence-transformers/natural-questions", split="train[90000:]")
 
 # We can use a dictionary for the evaluation dataset too, but we don't have to. We could also just use
 # no evaluation dataset, or one dataset.
@@ -90,6 +105,10 @@ eval_dataset = {
     "quora": quora_pair_dev,
     "natural-questions": natural_questions_dev,
 }
+
+print("Eval sets")
+for k,v in eval_dataset.items():
+    print(k, v.column_names)
 
 # 4. Load several loss functions to train with
 # (anchor, positive), (anchor, positive, negative)
@@ -111,20 +130,81 @@ losses = {
     "natural-questions": mnrl_loss,
 }
 
-# 5. Define a simple trainer, although it's recommended to use one with args & evaluators
+# TODO: this does not work because warmup step will actually increase the LR
+# Maybe start with a lower learning rate that's ~ 10 epoch
+# Or our LR should decrease at constant rate, so that 10 epoch should have a lower LR in the end
+
+# Config learning rate based on batch size, training set size, and num epoch
+# train_batch_size = 6  # Batch size
+# eval_batch_size = 6  # Batch size
+# num_epochs = 10  # Number of epochs
+# warmup_ratio = 0.1  # Warm up for 10% of the training steps
+# training_data_size = sum([len(d) for d in train_dataset.values()])  # Updated size of your training data
+
+# # Recalculate the number of training steps
+# # This should be close to 32883 for train_batch_size 6, num_epochs 3 for the initial model with limited training data.
+# num_training_steps = (training_data_size // train_batch_size) * num_epochs
+
+# # Recalculate warmup steps (e.g., 10% of total training steps)
+# warmup_steps = int(warmup_ratio * num_training_steps)
+
+# # 5. Define a simple trainer, although it's recommended to use one with args & evaluators
+# train_args = SentenceTransformerTrainingArguments(
+#     "tmp_trainer-first-10000-10-epoch-retry-3-cosine-custom-steps",
+#     per_device_train_batch_size=train_batch_size,  # Batch size per GPU (or CPU if no GPU is used)
+#     per_device_eval_batch_size=eval_batch_size,   # Evaluation batch size if you have eval dataset
+#     num_train_epochs=num_epochs,  # Number of epochs
+#     learning_rate=5e-5,            # always start with the same default learning rate.
+#     # max_steps=num_training_steps,  # Fixed training steps for consistent decay
+#     # warmup_steps=warmup_steps,
+#     # weight_decay=0.01,
+#     # auto_find_batch_size=True,        # auto adjust batch size
+#     evaluation_strategy="steps",      # Evaluate every N steps
+#     eval_steps=500,                  # Perform evaluation every 5000 steps
+# )
+# # Default is save for every 500 steps
+# # https://sbert.net/docs/package_reference/sentence_transformer/training_args.html#sentence_transformers.training_args.SentenceTransformerTrainingArguments.set_save
+# train_args.set_save(strategy="steps", steps=5000)
+
+# # This will not work because it was auto adjusted.
+# # train_args.set_lr_scheduler(num_epochs=num_epochs)
+# train_args.set_lr_scheduler(num_epochs=num_epochs,
+#                             name="cosine",
+#                             max_steps=num_training_steps,
+#                             warmup_ratio=warmup_ratio,
+#                             warmup_steps=warmup_steps)
+
+train_batch_size = 4  # Batch size
+eval_batch_size = 4  # Batch size
+num_epochs = 3  # Number of epochs
 train_args = SentenceTransformerTrainingArguments(
-    "tmp_trainer-first-10000-3-epoch-retry-1-no-auto-batch",
-    per_device_train_batch_size=6,  # Batch size per GPU (or CPU if no GPU is used)
-    per_device_eval_batch_size=6,   # Evaluation batch size if you have eval dataset
-    # num_train_epochs=10,              # default is 3
-    # auto_find_batch_size=True,        # auto adjust batch size
+    "tmp_trainer-full-3-epoch-linear-lr-1e-5-batch-4",
+    per_device_train_batch_size=train_batch_size,  # Batch size per GPU (or CPU if no GPU is used)
+    per_device_eval_batch_size=eval_batch_size,   # Evaluation batch size if you have eval dataset
+    num_train_epochs=num_epochs,  # Number of epochs
+    learning_rate=1e-5,            # converages too quickly?
+    # learning_rate=3e-5,            # converages too quickly?
+    # learning_rate=2e-5,            # always start with the same default learning rate.
+    # max_steps=num_training_steps,  # Fixed training steps for consistent decay
+    # warmup_steps=warmup_steps,
+    # weight_decay=0.01,
+    auto_find_batch_size=True,        # auto adjust batch size
     evaluation_strategy="steps",      # Evaluate every N steps
-    eval_steps=500,                  # Perform evaluation every 5000 steps
+    eval_steps=2500,                  # Perform evaluation every 5000 steps
+    save_total_limit=20,
+    bf16=True,
 )
 # Default is save for every 500 steps
 # https://sbert.net/docs/package_reference/sentence_transformer/training_args.html#sentence_transformers.training_args.SentenceTransformerTrainingArguments.set_save
 train_args.set_save(strategy="steps", steps=5000)
 
+# TODO: for some reason it restarted training around
+"""
+{'loss': 0.7495, 'grad_norm': 0.0019107084954157472, 'learning_rate': 9.433869240733956e-06, 'epoch': 0.17}
+  6%|█████                                                                                    | 127421/2243298 [6:34:58<109:18:46,  5.38it/s]
+{'loss': 0.7143, 'grad_norm': 0.016145436093211174, 'learning_rate': 9.997771138743048e-06, 'epoch': 0.0}        | 0/2243298 [00:00<?, ?it/s]
+{'loss': 0.6057, 'grad_norm': 0.34214434027671814, 'learning_rate': 9.995542277486094e-06, 'epoch': 0.0}
+"""
 trainer = SentenceTransformerTrainer(
     model=model,
     train_dataset=train_dataset,
@@ -133,6 +213,7 @@ trainer = SentenceTransformerTrainer(
     tokenizer=tokenizer,
     args = train_args
 )
+# trainer.train(resume_from_checkpoint=True)
 trainer.train()
 
 # 6. save the trained model and optionally push it to the Hugging Face Hub
